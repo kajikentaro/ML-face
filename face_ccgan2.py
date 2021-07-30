@@ -1,3 +1,4 @@
+#%%
 from __future__ import print_function, division
 import dlib
 import matplotlib.pyplot as plt
@@ -19,10 +20,7 @@ from imutils import face_utils
 import cv2
 import numpy as np
 
-img = cv2.imread(
-    r"C:\Users\aaa\Documents\lfw\lfw\Aaron_Eckhart\Aaron_Eckhart_0001.jpg")
-
-
+#%%
 class FaceEditor:
     mask_idx = [3, 30, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3]
 
@@ -73,16 +71,6 @@ class FaceEditor:
     def save(self, img):
         cv2.imwrite('tmp.png', img)
 
-
-raw_img = cv2.imread(r"C:\Users\aaa\Documents\lfw\lfw\Aaron_Eckhart_0001.jpg")
-aaa = FaceEditor()
-original = aaa.face_extraction(raw_img)[0]
-generated = np.copy(original)
-template = aaa.clip_mouth(generated)
-print(template.shape)
-# aaa.save(img)
-
-
 def build_generator():
     def conv2d(layer_input, filters, f_size=4, bn=True):
         """Layers used during downsampling"""
@@ -112,15 +100,19 @@ def build_generator():
     d3 = conv2d(d2, gf*4)
     d4 = conv2d(d3, gf*8)
 
+    print(img)
+    print(d1)
+    print(d2)
+    print(d3)
+    print(d4)
+
     # Upsampling
     u1 = deconv2d(d4, d3, gf*4)
     u2 = deconv2d(u1, d2, gf*2)
     u3 = deconv2d(u2, d1, gf)
-
     u4 = UpSampling2D(size=2)(u3)
     output_img = Conv2D(channels, kernel_size=4, strides=1,
                         padding='same', activation='tanh')(u4)
-
     return Model(img, output_img)
 
 
@@ -139,7 +131,6 @@ def build_discriminator():
     model.add(LeakyReLU(alpha=0.2))
     model.add(InstanceNormalization())
 
-    model.summary()
 
     img = Input(shape=img_shape)
     features = model(img)
@@ -197,15 +188,17 @@ def save_model():
 
 
 helper = FaceEditor()
-img_rows = 100  # 縦
-img_cols = 100  # 横
+img_rows = 128  # 縦
+img_cols = 128  # 横
+match = None
 
 
+#%%
 def load_data():
     import glob
-    global train_original, train_masked, train_template, img_rows, img_cols
-    img_rows = 100
-    img_cols = 100
+    global train_original, train_masked, train_template, img_rows, img_cols, match
+    img_rows = 128
+    img_cols = 128
     match = glob.glob("C:/Users/aaa/Documents/lfw/lfw/*.jpg")
     train_original = []
     train_masked = []
@@ -229,6 +222,7 @@ def load_data():
 
 load_data()
 
+#%%
 channels = 3  # 色の数
 img_shape = (img_rows, img_cols, channels)
 
@@ -240,21 +234,22 @@ epochs = 20000
 batch_size = 32
 sample_interval = 200
 
+# 識別機
 discriminator = build_discriminator()
 discriminator.compile(loss=['binary_crossentropy'],
                       optimizer=optimizer,
                       metrics=['accuracy'])
 
-generator = build_generator()
 
-# 生成器はマスク済みをインプットする
-gen_img = generator(Input(shape=img_shape))
+# 生成器
+masked_img = Input(shape=img_shape)
+
+generator = build_generator()
+gen_img = generator(masked_img)
 
 discriminator.trainable = False
 valid = discriminator(gen_img)
 
-# The combined model  (stacked generator and discriminator)
-# Trains the generator to fool the discriminator
 combined = Model(masked_img, valid)
 combined.compile(loss=['binary_crossentropy'],
                  optimizer=optimizer)
@@ -281,10 +276,10 @@ for epoch in range(epochs):
 
     # Plot the progress
     print("%d [D loss: %f, op_acc: %.2f%%] [G loss: %f]" %
-          (epoch, d_loss[0], 100*d_loss[4], g_loss))
+          (epoch, d_loss[0], 100*d_loss[1], g_loss))
 
     # If at save interval => save generated image samples
-    if epoch % sample_interval == 0:
+    if epoch % sample_interval == 0 and False:
         # Select a random half batch of images
         idx = np.random.randint(0, X_train.shape[0], 6)
         imgs = X_train[idx]
@@ -299,3 +294,5 @@ def test():
 
 test()
 print(test_text)
+
+# %%
