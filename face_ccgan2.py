@@ -1,4 +1,5 @@
 #%%
+# ライブラリをインポートします
 from __future__ import print_function, division
 import dlib
 import matplotlib.pyplot as plt
@@ -13,7 +14,7 @@ from keras.layers.convolutional import UpSampling2D, Conv2D
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers import Concatenate
 from keras.layers import BatchNormalization, Activation, Embedding, ZeroPadding2D
-from keras.layers import Input, Dense, Reshape, Flatten, Dropout, multiply, GaussianNoise
+from keras.layers import Input, Dense, Reshape, Flatten, Dropout, multiply, GaussianNoise, add
 from keras_contrib.layers.normalization.instancenormalization import InstanceNormalization
 from keras.datasets import mnist
 from imutils import face_utils
@@ -21,6 +22,7 @@ import cv2
 import numpy as np
 
 #%%
+# 画像処理用のクラスを作成します
 class FaceEditor:
     mask_idx = [3, 30, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3]
 
@@ -50,8 +52,8 @@ class FaceEditor:
             (-1, 1, 2)).astype(np.int32)
         cv2.fillPoly(img, [mask_points], (0, 0, 0))
 
-        template = np.zeros((img.shape[0], img.shape[1]))
-        template = cv2.fillPoly(template, [mask_points], 1)
+        template = np.zeros((img.shape[0], img.shape[1], img.shape[2]))
+        template = cv2.fillPoly(template, [mask_points], (1,1,1))
         return template
 
     def combine(self, generated_img, original_img, template):
@@ -92,28 +94,30 @@ def build_generator():
         u = Concatenate()([u, skip_input])
         return u
 
-    img = Input(shape=img_shape)
+    masked_img = Input(shape=img_shape)
 
     # Downsampling
-    d1 = conv2d(img, gf, bn=False)
+    d1 = conv2d(masked_img , gf, bn=False)
     d2 = conv2d(d1, gf*2)
     d3 = conv2d(d2, gf*4)
     d4 = conv2d(d3, gf*8)
 
-    print(img)
-    print(d1)
-    print(d2)
-    print(d3)
-    print(d4)
+    print(gf)
 
     # Upsampling
     u1 = deconv2d(d4, d3, gf*4)
     u2 = deconv2d(u1, d2, gf*2)
     u3 = deconv2d(u2, d1, gf)
     u4 = UpSampling2D(size=2)(u3)
-    output_img = Conv2D(channels, kernel_size=4, strides=1,
+    gen_img = Conv2D(channels, kernel_size=4, strides=1,
                         padding='same', activation='tanh')(u4)
-    return Model(img, output_img)
+
+    mask_template = Input(shape=img_shape)
+    without_mask = Input(shape=img_shape)
+    mouth = multiply([gen_img, mask_template])
+    output_img = add([mouth, without_mask])
+
+    return masked_img,mask_template,without_mask,output_img
 
 
 def build_discriminator():
@@ -168,6 +172,7 @@ img_cols = 128  # 横
 
 
 #%%
+# 画像を読み込み、前処理を行います
 match = None
 def load_data():
     import glob
@@ -190,20 +195,20 @@ def load_data():
             train_original.append(a)
             train_template.append(helper.clip_mouth(b))
             train_masked.append(b)
-    train_original = np.array(train_original)
-    train_masked = np.array(train_masked)
-    train_template = np.array(train_template)
+    train_original = np.array(train_original) / 255
+    train_masked = np.array(train_masked) / 255
+    train_template = np.array(train_template) 
 
 
 load_data()
 
 #%%
+# 学習を開始します
 channels = 3  # 色の数
 img_shape = (img_rows, img_cols, channels)
 
 # 生成器と識別機の1stレイヤーの中のフィルター数
-gf = 32
-df = 32
+gf = 64 
 optimizer = Adam(0.0002, 0.5)
 epochs = 20000
 batch_size = 32
@@ -217,17 +222,17 @@ discriminator.compile(loss=['binary_crossentropy'],
 
 
 # 生成器
-masked_img = Input(shape=img_shape)
-
-generator = build_generator()
-gen_img = generator(masked_img)
-
 discriminator.trainable = False
-valid = discriminator(gen_img)
+masked_img, mask_template, without_mask, output_img = build_generator()
 
-combined = Model(masked_img, valid)
+generator = Model([masked_img,mask_template,without_mask], output_img)
+
+valid = discriminator(output_img)
+
+combined = Model([masked_img,mask_template,without_mask], valid)
 combined.compile(loss=['binary_crossentropy'],
                  optimizer=optimizer)
+
 
 # Adversarial ground truths
 valid = np.ones(batch_size)
@@ -238,19 +243,20 @@ for epoch in range(epochs):
     idx = np.random.randint(0, len(match), batch_size)
     original_imgs = train_original[idx]
     masked_imgs = train_masked[idx]
-    templates = train_template[idx]
+    mask_template = train_template[idx]
+    without_mask = np.logical_not(mask_template) * original_imgs
 
     # Train the discriminator
-    gen_imgs = generator.predict(masked_imgs)
+    gen_imgs = generator.predict([masked_imgs,mask_template,without_mask])
     d_loss_real = discriminator.train_on_batch(original_imgs, valid)
     d_loss_fake = discriminator.train_on_batch(gen_imgs, fake)
     d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
 
     # Train the generator
-    g_loss = combined.train_on_batch(masked_imgs, valid)
+    g_loss = combined.train_on_batch([masked_imgs,mask_template,without_mask], valid)
 
     # Plot the progress
-    print("d_loss_real", d_loss_real, "d_loss_fake", d_loss_fake,"g_loss",g_loss)
+    print(epoch,"d_loss_real", d_loss_real, "d_loss_fake", d_loss_fake,"g_loss",g_loss)
 
     # If at save interval => save generated image samples
     if epoch % sample_interval == 0:
@@ -259,14 +265,6 @@ for epoch in range(epochs):
         img = np.clip(gen_imgs[0] * 255, 0, 255).astype(np.uint8)
         helper.save(str(epoch) + ".png",img)
         save_model()
-
-
-def test():
-    global test_text
-    test_text = "hello"
-
-
-test()
-print(test_text)
+# %%
 
 # %%
