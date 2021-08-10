@@ -73,6 +73,39 @@ class FaceEditor:
     def save(self, name,img):
         cv2.imwrite(name, img)
 
+#%%
+# 画像を読み込み、前処理を行います
+match = None
+helper = FaceEditor()
+def load_data():
+    import glob
+    global train_original, train_masked, train_template, img_rows, img_cols, match
+    img_rows = 128
+    img_cols = 128
+    match = glob.glob("C:/Users/aaa/Documents/lfw/lfw/*.jpg")
+    train_original = []
+    train_masked = []
+    train_template = []
+    for path in match:
+        raw_img = cv2.imread(path)
+        for original in helper.face_extraction(raw_img):
+            if(min(original.shape) == 0):
+                helper.show(raw_img)
+                print(path)
+            a = np.array(PIL.Image.fromarray(
+                original).resize((img_rows, img_cols)))
+            b = np.copy(a)
+            train_original.append(a)
+            train_template.append(helper.clip_mouth(b))
+            train_masked.append(b)
+    train_original = np.array(train_original) / 255
+    train_masked = np.array(train_masked) / 255
+    train_template = np.array(train_template) 
+load_data()
+
+
+#%%
+# モデルを生成します
 def build_generator():
     def conv2d(layer_input, filters, f_size=4, bn=True):
         """Layers used during downsampling"""
@@ -101,11 +134,11 @@ def build_generator():
     d2 = conv2d(d1, gf*2)
     d3 = conv2d(d2, gf*4)
     d4 = conv2d(d3, gf*8)
-
-    print(gf)
+    d5 = conv2d(d4, gf*16)
 
     # Upsampling
-    u1 = deconv2d(d4, d3, gf*4)
+    u0 = deconv2d(d5, d4, gf*8)
+    u1 = deconv2d(u0, d3, gf*4)
     u2 = deconv2d(u1, d2, gf*2)
     u3 = deconv2d(u2, d1, gf)
     u4 = UpSampling2D(size=2)(u3)
@@ -166,52 +199,20 @@ def save_model():
 #    print(template.shape)
 
 
-helper = FaceEditor()
-img_rows = 128  # 縦
-img_cols = 128  # 横
 
-
-#%%
-# 画像を読み込み、前処理を行います
-match = None
-def load_data():
-    import glob
-    global train_original, train_masked, train_template, img_rows, img_cols, match
-    img_rows = 128
-    img_cols = 128
-    match = glob.glob("C:/Users/aaa/Documents/lfw/lfw/*.jpg")
-    train_original = []
-    train_masked = []
-    train_template = []
-    for path in match:
-        raw_img = cv2.imread(path)
-        for original in helper.face_extraction(raw_img):
-            if(min(original.shape) == 0):
-                helper.show(raw_img)
-                print(path)
-            a = np.array(PIL.Image.fromarray(
-                original).resize((img_rows, img_cols)))
-            b = np.copy(a)
-            train_original.append(a)
-            train_template.append(helper.clip_mouth(b))
-            train_masked.append(b)
-    train_original = np.array(train_original) / 255
-    train_masked = np.array(train_masked) / 255
-    train_template = np.array(train_template) 
-
-
-load_data()
 
 #%%
 # 学習を開始します
+img_rows = 128  # 縦
+img_cols = 128  # 横
 channels = 3  # 色の数
 img_shape = (img_rows, img_cols, channels)
 
 # 生成器と識別機の1stレイヤーの中のフィルター数
-gf = 64 
+gf = 32
 optimizer = Adam(0.0002, 0.5)
 epochs = 20000
-batch_size = 32
+batch_size = 64
 sample_interval = 10
 
 # 識別機
@@ -265,6 +266,4 @@ for epoch in range(epochs):
         img = np.clip(gen_imgs[0] * 255, 0, 255).astype(np.uint8)
         helper.save(str(epoch) + ".png",img)
         save_model()
-# %%
 
-# %%
